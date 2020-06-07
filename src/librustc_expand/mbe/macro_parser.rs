@@ -286,6 +286,7 @@ pub(super) fn count_names(ms: &[TokenTree]) -> usize {
                 TokenTree::Sequence(_, ref seq) => seq.num_captures,
                 TokenTree::Delimited(_, ref delim) => count_names(&delim.tts),
                 TokenTree::MetaVar(..) => 0,
+                TokenTree::MetaVarCount(..) => 0,
                 TokenTree::MetaVarDecl(..) => 1,
                 TokenTree::Token(..) => 0,
             }
@@ -395,7 +396,7 @@ fn nameize<I: Iterator<Item = NamedMatch>>(
                 }
                 Occupied(..) => return Err((sp, format!("duplicated bind name: {}", bind_name))),
             },
-            TokenTree::MetaVar(..) | TokenTree::Token(..) => (),
+            TokenTree::MetaVar(..) | TokenTree::Token(..) | TokenTree::MetaVarCount(..) => (),
         }
 
         Ok(())
@@ -608,7 +609,7 @@ fn inner_parse_loop<'root, 'tt>(
                 // rules. NOTE that this is not necessarily an error unless _all_ items in
                 // `cur_items` end up doing this. There may still be some other matchers that do
                 // end up working out.
-                TokenTree::Token(..) | TokenTree::MetaVar(..) => {}
+                TokenTree::Token(..) | TokenTree::MetaVar(..) | TokenTree::MetaVarCount(..) => {}
             }
         }
     }

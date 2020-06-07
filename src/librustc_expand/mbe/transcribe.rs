@@ -10,7 +10,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{pluralize, PResult};
 use rustc_span::hygiene::{ExpnId, Transparency};
-use rustc_span::symbol::MacroRulesNormalizedIdent;
+use rustc_span::symbol::{sym, MacroRulesNormalizedIdent};
 use rustc_span::Span;
 
 use smallvec::{smallvec, SmallVec};
@@ -260,6 +260,31 @@ pub(super) fn transcribe<'a>(
                 }
             }
 
+            // Replace meta-var counts with a literal usize for the number of repetitions in this context.
+            mbe::TokenTree::MetaVarCount(mut sp, mut original_ident) => {
+                let ident = MacroRulesNormalizedIdent::new(original_ident);
+                match count_repetitions(ident, interp, &repeats) {
+                    Some(Ok(count)) => {
+                        marker.visit_span(&mut sp);
+                        result.push(
+                            TokenTree::token(
+                                token::TokenKind::lit(token::Integer, sym::integer(count), None),
+                                sp,
+                            )
+                            .into(),
+                        );
+                    }
+                    Some(Err(msg)) => return Err(cx.struct_span_err(sp, &msg)),
+                    None => {
+                        marker.visit_span(&mut sp);
+                        marker.visit_ident(&mut original_ident);
+                        result.push(TokenTree::token(token::Dollar, sp).into());
+                        result.push(TokenTree::token(token::Pound, sp).into());
+                        result.push(TokenTree::Token(Token::from_ast_ident(original_ident)).into());
+                    }
+                }
+            }
+
             // If we are entering a new delimiter, we push its contents to the `stack` to be
             // processed, and we push all of the currently produced results to the `result_stack`.
             // We will produce all of the results of the inside of the `Delimited` and then we will
@@ -306,6 +331,30 @@ fn lookup_cur_matched<'a>(
         }
 
         matched
+    })
+}
+
+fn count_repetitions<'a>(
+    ident: MacroRulesNormalizedIdent,
+    interpolations: &'a FxHashMap<MacroRulesNormalizedIdent, NamedMatch>,
+    repeats: &[(usize, usize)],
+) -> Option<Result<usize, String>> {
+    interpolations.get(&ident).map(|matched| {
+        let mut matched = matched;
+        for &(idx, _) in repeats {
+            match matched {
+                MatchedNonterminal(_) => {
+                    return Err(format!("variable '{}' does not repeat at this depth", ident));
+                }
+                MatchedSeq(ref ads) => matched = ads.get(idx).unwrap(),
+            }
+        }
+        match matched {
+            MatchedNonterminal(_) => {
+                return Err(format!("variable '{}' does not repeat at this depth", ident));
+            }
+            MatchedSeq(ref ads) => Ok(ads.len()),
+        }
     })
 }
 
@@ -380,7 +429,9 @@ fn lockstep_iter_size(
                 size.with(lockstep_iter_size(tt, interpolations, repeats))
             })
         }
-        TokenTree::MetaVar(_, name) | TokenTree::MetaVarDecl(_, name, _) => {
+        TokenTree::MetaVar(_, name)
+        | TokenTree::MetaVarDecl(_, name, _)
+        | TokenTree::MetaVarCount(_, name) => {
             let name = MacroRulesNormalizedIdent::new(name);
             match lookup_cur_matched(name, interpolations, repeats) {
                 Some(matched) => match matched {

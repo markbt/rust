@@ -139,6 +139,37 @@ fn parse_tree(
                 }
             }
 
+            // `tree` is followed by a `#`.  This should be `$#ident` to indicate a metavariable
+            // repetition count.
+            Some(tokenstream::TokenTree::Token(Token { kind: token::Pound, span: _ })) => {
+                match trees.next() {
+                    Some(tokenstream::TokenTree::Token(token)) if token.is_ident() => {
+                        let (ident, _) = token.ident().unwrap();
+                        let span = ident.span.with_lo(span.lo());
+                        TokenTree::MetaVarCount(span, ident)
+                    }
+
+                    Some(tokenstream::TokenTree::Delimited(delim_span, _delim, _tts)) => {
+                        let msg = format!("expected identifier, found delimiter");
+                        sess.span_diagnostic.span_err(delim_span.open, &msg);
+                        TokenTree::MetaVarCount(span, Ident::invalid())
+                    }
+
+                    // `$#` is followed by a random token. This is an error.
+                    Some(tokenstream::TokenTree::Token(token)) => {
+                        let msg = format!(
+                            "expected identifier, found `{}`",
+                            pprust::token_to_string(&token),
+                        );
+                        sess.span_diagnostic.span_err(token.span, &msg);
+                        TokenTree::MetaVarCount(token.span, Ident::invalid())
+                    }
+
+                    // There are no more tokens. Just return the `$` we already have.
+                    None => TokenTree::token(token::Dollar, span),
+                }
+            }
+
             // `tree` is followed by a random token. This is an error.
             Some(tokenstream::TokenTree::Token(token)) => {
                 let msg =

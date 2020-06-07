@@ -73,8 +73,8 @@ enum KleeneOp {
     ZeroOrOne,
 }
 
-/// Similar to `tokenstream::TokenTree`, except that `$i`, `$i:ident`, and `$(...)`
-/// are "first-class" token trees. Useful for parsing macros.
+/// Similar to `tokenstream::TokenTree`, except that `$i`, `$#i`, `$i:ident`, and
+/// `$(...)` are "first-class" token trees. Useful for parsing macros.
 #[derive(Debug, Clone, PartialEq, RustcEncodable, RustcDecodable)]
 enum TokenTree {
     Token(Token),
@@ -83,6 +83,8 @@ enum TokenTree {
     Sequence(DelimSpan, Lrc<SequenceRepetition>),
     /// e.g., `$var`
     MetaVar(Span, Ident),
+    /// e.g., `$#var`
+    MetaVarCount(Span, Ident),
     /// e.g., `$var:expr`. This is only used in the left hand side of MBE macros.
     MetaVarDecl(Span, Ident /* name to bind */, Ident /* kind of nonterminal */),
 }
@@ -141,6 +143,7 @@ impl TokenTree {
         match *self {
             TokenTree::Token(Token { span, .. })
             | TokenTree::MetaVar(span, _)
+            | TokenTree::MetaVarCount(span, _)
             | TokenTree::MetaVarDecl(span, _, _) => span,
             TokenTree::Delimited(span, _) | TokenTree::Sequence(span, _) => span.entire(),
         }
