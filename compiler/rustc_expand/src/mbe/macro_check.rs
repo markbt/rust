@@ -276,6 +276,9 @@ fn check_binders(
                 binders.insert(name, BinderInfo { span, ops: ops.into() });
             }
         }
+        TokenTree::MetaVarExpr(..) => {
+            // TODO(markbt): Should we check anything here?
+        }
         TokenTree::Delimited(_, ref del) => {
             for tt in &del.tts {
                 check_binders(sess, node_id, tt, macros, binders, ops, valid);
@@ -332,6 +335,9 @@ fn check_occurrences(
         TokenTree::MetaVar(span, name) => {
             let name = MacroRulesNormalizedIdent::new(name);
             check_ops_is_prefix(sess, node_id, macros, binders, ops, span, name);
+        }
+        TokenTree::MetaVarExpr(..) => {
+            // TODO(markbt): Should we check anything here?
         }
         TokenTree::Delimited(_, ref del) => {
             check_nested_occurrences(sess, node_id, &del.tts, macros, binders, ops, valid);

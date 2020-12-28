@@ -6,6 +6,7 @@
 crate mod macro_check;
 crate mod macro_parser;
 crate mod macro_rules;
+crate mod metavar_expr;
 crate mod quoted;
 crate mod transcribe;
 
@@ -16,6 +17,8 @@ use rustc_span::symbol::Ident;
 use rustc_span::Span;
 
 use rustc_data_structures::sync::Lrc;
+
+crate use metavar_expr::MetaVarExpr;
 
 /// Contains the sub-token-trees of a "delimited" token tree, such as the contents of `(`. Note
 /// that the delimiter itself might be `NoDelim`.
@@ -73,8 +76,8 @@ enum KleeneOp {
     ZeroOrOne,
 }
 
-/// Similar to `tokenstream::TokenTree`, except that `$i`, `$i:ident`, and `$(...)`
-/// are "first-class" token trees. Useful for parsing macros.
+/// Similar to `tokenstream::TokenTree`, except that `$i`, `$i:ident`, `$(...)`,
+/// and `${...}` are "first-class" token trees. Useful for parsing macros.
 #[derive(Debug, Clone, PartialEq, Encodable, Decodable)]
 enum TokenTree {
     Token(Token),
@@ -85,6 +88,8 @@ enum TokenTree {
     MetaVar(Span, Ident),
     /// e.g., `$var:expr`. This is only used in the left hand side of MBE macros.
     MetaVarDecl(Span, Ident /* name to bind */, Option<NonterminalKind>),
+    /// A meta-variable expression inside `${...}`
+    MetaVarExpr(DelimSpan, MetaVarExpr),
 }
 
 impl TokenTree {
@@ -139,7 +144,9 @@ impl TokenTree {
             TokenTree::Token(Token { span, .. })
             | TokenTree::MetaVar(span, _)
             | TokenTree::MetaVarDecl(span, _, _) => span,
-            TokenTree::Delimited(span, _) | TokenTree::Sequence(span, _) => span.entire(),
+            TokenTree::Delimited(span, _)
+            | TokenTree::Sequence(span, _)
+            | TokenTree::MetaVarExpr(span, _) => span.entire(),
         }
     }
 

@@ -9,7 +9,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{pluralize, PResult};
 use rustc_span::hygiene::{ExpnId, Transparency};
-use rustc_span::symbol::MacroRulesNormalizedIdent;
+use rustc_span::symbol::{sym, MacroRulesNormalizedIdent};
 use rustc_span::Span;
 
 use smallvec::{smallvec, SmallVec};
@@ -261,6 +261,11 @@ pub(super) fn transcribe<'a>(
                 }
             }
 
+            // Replace meta-variable expressions with the result of their expansion.
+            mbe::TokenTree::MetaVarExpr(sp, expr) => {
+                transcribe_metavar_expr(cx, &sp, &mut marker, expr, interp, &repeats, &mut result)?;
+            }
+
             // If we are entering a new delimiter, we push its contents to the `stack` to be
             // processed, and we push all of the currently produced results to the `result_stack`.
             // We will produce all of the results of the inside of the `Delimited` and then we will
@@ -308,6 +313,33 @@ fn lookup_cur_matched<'a>(
 
         matched
     })
+}
+
+fn count_repetitions(
+    mut matched: &NamedMatch,
+    repeats: &[(usize, usize)],
+    depth: usize,
+) -> Option<usize> {
+    for &(idx, _) in repeats {
+        match matched {
+            MatchedNonterminal(_) => return None,
+            MatchedSeq(ref ads) => matched = ads.get(idx).unwrap(),
+        }
+    }
+    fn count(matched: &NamedMatch, depth: usize) -> usize {
+        match matched {
+            MatchedNonterminal(_) => 1,
+            MatchedSeq(ref ads) => {
+                if depth == 1 {
+                    ads.len()
+                } else {
+                    let depth = depth.saturating_sub(1);
+                    ads.iter().map(|ad| count(ad, depth)).sum()
+                }
+            }
+        }
+    }
+    Some(count(matched, depth))
 }
 
 /// An accumulator over a TokenTree to be used with `fold`. During transcription, we need to make
@@ -391,6 +423,101 @@ fn lockstep_iter_size(
                 _ => LockstepIterSize::Unconstrained,
             }
         }
+        TokenTree::MetaVarExpr(_, ref expr) => {
+            expr.ident().into_iter().fold(LockstepIterSize::Unconstrained, |size, name| {
+                let name = MacroRulesNormalizedIdent::new(name.clone());
+                match lookup_cur_matched(name, interpolations, repeats) {
+                    Some(matched) => match matched {
+                        MatchedNonterminal(_) => size,
+                        MatchedSeq(ref ads) => {
+                            size.with(LockstepIterSize::Constraint(ads.len(), name))
+                        }
+                    },
+                    _ => size,
+                }
+            })
+        }
         TokenTree::Token(..) => LockstepIterSize::Unconstrained,
     }
+}
+
+fn transcribe_metavar_expr<'a>(
+    cx: &ExtCtxt<'a>,
+    sp: &DelimSpan,
+    marker: &mut Marker,
+    expr: mbe::MetaVarExpr,
+    interp: &FxHashMap<MacroRulesNormalizedIdent, NamedMatch>,
+    repeats: &[(usize, usize)],
+    result: &mut Vec<TreeAndSpacing>,
+) -> PResult<'a, ()> {
+    match expr {
+        mbe::MetaVarExpr::Ignore(..) => {}
+        mbe::MetaVarExpr::Count(original_ident, depth) => {
+            let ident = MacroRulesNormalizedIdent::new(original_ident);
+            match interp.get(&ident) {
+                Some(matched) => match count_repetitions(matched, &repeats, depth) {
+                    Some(count) => {
+                        marker.visit_span(&mut sp.entire());
+                        result.push(
+                            TokenTree::token(
+                                token::TokenKind::lit(token::Integer, sym::integer(count), None),
+                                sp.entire(),
+                            )
+                            .into(),
+                        );
+                    }
+                    None => {
+                        return Err(cx.struct_span_err(
+                            sp.entire(),
+                            &format!("variable '{}' does not repeat at this depth", ident),
+                        ));
+                    }
+                },
+                None => {
+                    return Err(cx.struct_span_err(
+                        sp.entire(),
+                        &format!(
+                            "variable '{}' is not recognised in meta-variable expression",
+                            ident
+                        ),
+                    ));
+                }
+            }
+        }
+        mbe::MetaVarExpr::Index(depth) => match repeats.iter().nth_back(depth) {
+            Some((index, _length)) => {
+                marker.visit_span(&mut sp.entire());
+                result.push(
+                    TokenTree::token(
+                        token::TokenKind::lit(token::Integer, sym::integer(*index), None),
+                        sp.entire(),
+                    )
+                    .into(),
+                );
+            }
+            None => {
+                return Err(
+                    cx.struct_span_err(sp.entire(), &format!("no repetitions at this depth"))
+                );
+            }
+        },
+        mbe::MetaVarExpr::Length(depth) => match repeats.iter().nth_back(depth) {
+            Some((_index, length)) => {
+                marker.visit_span(&mut sp.entire());
+                result.push(
+                    TokenTree::token(
+                        token::TokenKind::lit(token::Integer, sym::integer(*length), None),
+                        sp.entire(),
+                    )
+                    .into(),
+                );
+            }
+            None => {
+                return Err(
+                    cx.struct_span_err(sp.entire(), &format!("no repetitions at this depth"))
+                );
+            }
+        },
+    }
+    Ok(())
 }
